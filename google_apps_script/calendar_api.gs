@@ -34,11 +34,12 @@ function doGet(e) {
   var calEvents = calendar.getEvents(now, endDate);
   var result    = [];
 
+  var TZ = "Europe/Madrid";
   for (var i = 0; i < Math.min(calEvents.length, MAX_EVENTS); i++) {
     var ev = calEvents[i];
     result.push({
-      start:   Utilities.formatDate(ev.getStartTime(), "UTC", "yyyy-MM-dd'T'HH:mm:ss'Z'"),
-      end:     Utilities.formatDate(ev.getEndTime(),   "UTC", "yyyy-MM-dd'T'HH:mm:ss'Z'"),
+      start:   Utilities.formatDate(ev.getStartTime(), TZ, "yyyy-MM-dd'T'HH:mm:ss"),
+      end:     Utilities.formatDate(ev.getEndTime(),   TZ, "yyyy-MM-dd'T'HH:mm:ss"),
       summary: ev.getTitle()
     });
   }
