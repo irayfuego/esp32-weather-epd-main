@@ -16,6 +16,7 @@
 #define NUM_MAX_CALENDAR_ENTRIES 4
 #define CALENDAR_LINE_GAP        70
 #define GCAL_TIMEOUT_MS          8000
+#define GCAL_MAX_ATTEMPTS        2    // network retries before falling back to cache
 #define CAL_NVS_NS               "gcal"
 #define CAL_NVS_KEY              "json"
 
@@ -23,10 +24,12 @@ typedef struct {
   String start;
   String end;
   String summary;
+  bool   allDay;
 } calendar_event_t;
 
 static calendar_event_t calendar_entries[NUM_MAX_CALENDAR_ENTRIES];
-static tm *timeCurrent;
+static tm  *timeCurrent;
+static bool calendarStale = false; // true when entries come from NVS cache
 
 static byte calcDayOfWeek(int d, int m, int y)
 {
@@ -116,9 +119,13 @@ void drawCalendarEntries()
   const int yPos0 = 250;
   const char *CONS_WEEKDAY[7] = {"Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"};
 
-  display.setFont(&FONT_12pt8b);
-
   if (calendar_entries[0].start.isEmpty()) return;
+
+  // Small stale indicator above the first entry when data comes from cache
+  if (calendarStale) {
+    display.setFont(&FONT_12pt8b);
+    drawString(xPos0 + 5, yPos0 - 22, "(~)", LEFT);
+  }
 
   for (int i = 0; i < NUM_MAX_CALENDAR_ENTRIES; i++) {
     if (calendar_entries[i].start.isEmpty()) break;
@@ -127,13 +134,12 @@ void drawCalendarEntries()
     float second;
     hour = 0;
     minute = 0;
-    sscanf(calendar_entries[i].start.c_str(), "%d-%d-%dT%d:%d:%fZ",
+    sscanf(calendar_entries[i].start.c_str(), "%d-%d-%dT%d:%d:%f",
            &year, &month, &day, &hour, &minute, &second);
 
     int weekday = calcDayOfWeek(day, month, year);
     String shortweekday = CONS_WEEKDAY[weekday];
     String datetodraw = (String)day + "/" + (String)month;
-    String timetodraw = (String)hour + ":" + (minute < 10 ? "0" : "") + (String)minute;
 
     if (month == (timeCurrent->tm_mon + 1) && day == timeCurrent->tm_mday) {
       shortweekday = "HOY";
@@ -145,8 +151,14 @@ void drawCalendarEntries()
       drawString(xPos0, yPos0 + 13 + i * CALENDAR_LINE_GAP, datetodraw, RIGHT);
     }
 
-    display.setFont(&FONT_22pt8b);
-    drawString(xPos0 + 120, yPos0 + i * CALENDAR_LINE_GAP, timetodraw, RIGHT);
+    if (calendar_entries[i].allDay) {
+      display.setFont(&FONT_12pt8b);
+      drawString(xPos0 + 120, yPos0 + i * CALENDAR_LINE_GAP, "[DIA]", RIGHT);
+    } else {
+      String timetodraw = (String)hour + ":" + (minute < 10 ? "0" : "") + (String)minute;
+      display.setFont(&FONT_22pt8b);
+      drawString(xPos0 + 120, yPos0 + i * CALENDAR_LINE_GAP, timetodraw, RIGHT);
+    }
 
     String eventTitle = sanitizeText(calendar_entries[i].summary);
     display.setFont(&FONT_26pt8b);
@@ -188,6 +200,7 @@ static void parseCalendarJson(const String& body)
     calendar_entries[i].start   = ev["start"]   | "";
     calendar_entries[i].end     = ev["end"]     | "";
     calendar_entries[i].summary = ev["summary"] | "";
+    calendar_entries[i].allDay  = (ev["allDay"]  | 0) != 0;
     i++;
   }
 }
@@ -205,20 +218,34 @@ int getGoogleCalendar(WiFiClientSecure &client, tm *timeInfo)
   http.setTimeout(GCAL_TIMEOUT_MS);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.addHeader("Accept-Encoding", "identity");
-  http.begin(client, GCAL_SCRIPT_URL);
 
-  int httpResponse = http.GET();
-  Serial.println("Google Calendar HTTP: " + String(httpResponse));
+  int httpResponse = -1;
+  for (int attempt = 0; attempt < GCAL_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      Serial.println("Calendar: retrying...");
+      http.end();
+      delay(1000);
+      http.setTimeout(GCAL_TIMEOUT_MS);
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+      http.addHeader("Accept-Encoding", "identity");
+    }
+    http.begin(client, GCAL_SCRIPT_URL);
+    httpResponse = http.GET();
+    Serial.println("Calendar HTTP [" + String(attempt + 1) + "]: " + String(httpResponse));
+    if (httpResponse == HTTP_CODE_OK) break;
+  }
 
   if (httpResponse == HTTP_CODE_OK) {
     String body = http.getString();
     saveCalendarCache(body);
     parseCalendarJson(body);
+    calendarStale = false;
   } else {
     String cached = loadCalendarCache();
     if (!cached.isEmpty()) {
-      Serial.println("Calendar: fetch failed, using cached data");
+      Serial.println("Calendar: using cached data");
       parseCalendarJson(cached);
+      calendarStale = true;
     }
   }
 

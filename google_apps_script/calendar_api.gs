@@ -40,7 +40,8 @@ function doGet(e) {
     result.push({
       start:   Utilities.formatDate(ev.getStartTime(), TZ, "yyyy-MM-dd'T'HH:mm:ss"),
       end:     Utilities.formatDate(ev.getEndTime(),   TZ, "yyyy-MM-dd'T'HH:mm:ss"),
-      summary: ev.getTitle()
+      summary: ev.getTitle(),
+      allDay:  ev.isAllDayEvent() ? 1 : 0
     });
   }
 
